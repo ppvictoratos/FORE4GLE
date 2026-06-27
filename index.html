@@ -65,18 +65,15 @@
         function updatePhysics() {
             const b = game.ball;
 
-            // Gravity
-            b.vy += game.gravity;
-
-            // Apply velocity
+            // Apply velocity (no gravity, just rolling)
             b.x += b.vx;
             b.y += b.vy;
 
-            // Friction
+            // Friction (ball slows down)
             b.vx *= game.ball.friction;
             b.vy *= game.ball.friction;
 
-            // Boundary collision
+            // Boundary collision (walls bounce ball back)
             if (b.x - b.radius < 0) { b.x = b.radius; b.vx *= -0.8; }
             if (b.x + b.radius > canvas.width) { b.x = canvas.width - b.radius; b.vx *= -0.8; }
             if (b.y - b.radius < 0) { b.y = b.radius; b.vy *= -0.8; }
