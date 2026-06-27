@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FORE4GLE - Mini Golf</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 20px;
+            background: #2a2a2a;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            font-family: Arial, sans-serif;
+            color: #fff;
+        }
+        #gameContainer {
+            text-align: center;
+        }
+        canvas {
+            border: 3px solid #fff;
+            background: linear-gradient(135deg, #90EE90 0%, #228B22 100%);
+            display: block;
+            margin: 0 auto;
+        }
+        #info {
+            margin-top: 20px;
+            font-size: 14px;
+        }
+        #info p {
+            margin: 5px 0;
+        }
+    </style>
+</head>
+<body>
+    <div id="gameContainer">
+        <h1>FORE4GLE ⛳</h1>
+        <canvas id="gameCanvas" width="800" height="600"></canvas>
+        <div id="info">
+            <p><strong>Click to aim, drag to set power, release to hit</strong></p>
+            <p>Strokes: <span id="strokes">0</span> | Ball Velocity: <span id="velocity">0.0</span></p>
+        </div>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+
+        // Game state
+        const game = {
+            ball: { x: 100, y: 500, vx: 0, vy: 0, radius: 8, friction: 0.98, mass: 1 },
+            hole: { x: 700, y: 100, radius: 15 },
+            gravity: 0.3,
+            strokes: 0,
+            isAiming: false,
+            aimStart: null,
+            power: 0,
+            maxPower: 20,
+            ballInHole: false
+        };
+
+        // Physics
+        function updatePhysics() {
+            const b = game.ball;
+
+            // Gravity
+            b.vy += game.gravity;
+
+            // Apply velocity
+            b.x += b.vx;
+            b.y += b.vy;
+
+            // Friction
+            b.vx *= game.ball.friction;
+            b.vy *= game.ball.friction;
+
+            // Boundary collision
+            if (b.x - b.radius < 0) { b.x = b.radius; b.vx *= -0.8; }
+            if (b.x + b.radius > canvas.width) { b.x = canvas.width - b.radius; b.vx *= -0.8; }
+            if (b.y - b.radius < 0) { b.y = b.radius; b.vy *= -0.8; }
+            if (b.y + b.radius > canvas.height) { b.y = canvas.height - b.radius; b.vy *= -0.8; }
+
+            // Stop if nearly still
+            if (Math.abs(b.vx) < 0.1 && Math.abs(b.vy) < 0.1) {
+                b.vx = 0;
+                b.vy = 0;
+            }
+
+            // Check hole
+            const dx = b.x - game.hole.x;
+            const dy = b.y - game.hole.y;
+            const dist = Math.sqrt(dx * dx + dy * dy);
+            if (dist < b.radius + game.hole.radius) {
+                game.ballInHole = true;
+            }
+        }
+
+        // Draw
+        function draw() {
+            // Clear
+            ctx.fillStyle = 'transparent';
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            // Hole
+            ctx.fillStyle = '#000';
+            ctx.beginPath();
+            ctx.arc(game.hole.x, game.hole.y, game.hole.radius, 0, Math.PI * 2);
+            ctx.fill();
+
+            // Ball
+            ctx.fillStyle = '#fff';
+            ctx.beginPath();
+            ctx.arc(game.ball.x, game.ball.y, game.ball.radius, 0, Math.PI * 2);
+            ctx.fill();
+
+            // Aim line
+            if (game.isAiming && game.aimStart) {
+                ctx.strokeStyle = 'rgba(255,255,255,0.5)';
+                ctx.lineWidth = 2;
+                ctx.beginPath();
+                ctx.moveTo(game.ball.x, game.ball.y);
+                const angle = Math.atan2(game.aimStart.y - game.ball.y, game.aimStart.x - game.ball.x);
+                ctx.lineTo(game.ball.x + Math.cos(angle) * 100, game.ball.y + Math.sin(angle) * 100);
+                ctx.stroke();
+
+                // Power bar
+                ctx.fillStyle = 'rgba(255,255,0,0.7)';
+                ctx.fillRect(game.ball.x - 30, game.ball.y - 50, game.power * 3, 10);
+            }
+
+            // Win message
+            if (game.ballInHole) {
+                ctx.fillStyle = 'rgba(0,0,0,0.7)';
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+                ctx.fillStyle = '#fff';
+                ctx.font = 'bold 40px Arial';
+                ctx.textAlign = 'center';
+                ctx.fillText(`🎉 Hole in ${game.strokes}!`, canvas.width / 2, canvas.height / 2);
+                ctx.font = '20px Arial';
+                ctx.fillText('(Refresh to play again)', canvas.width / 2, canvas.height / 2 + 50);
+            }
+
+            // Update HUD
+            document.getElementById('strokes').textContent = game.strokes;
+            const vel = Math.sqrt(game.ball.vx ** 2 + game.ball.vy ** 2);
+            document.getElementById('velocity').textContent = vel.toFixed(1);
+        }
+
+        // Input
+        canvas.addEventListener('mousedown', (e) => {
+            if (game.ballInHole) return;
+            const rect = canvas.getBoundingClientRect();
+            game.aimStart = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+            game.isAiming = true;
+            game.power = 0;
+        });
+
+        canvas.addEventListener('mousemove', (e) => {
+            if (!game.isAiming || !game.aimStart) return;
+            const rect = canvas.getBoundingClientRect();
+            const x = e.clientX - rect.left;
+            const y = e.clientY - rect.top;
+            const dx = x - game.ball.x;
+            const dy = y - game.ball.y;
+            const dist = Math.sqrt(dx * dx + dy * dy);
+            game.power = Math.min(dist / 10, game.maxPower);
+        });
+
+        canvas.addEventListener('mouseup', (e) => {
+            if (!game.isAiming || !game.aimStart) return;
+            const rect = canvas.getBoundingClientRect();
+            const x = e.clientX - rect.left;
+            const y = e.clientY - rect.top;
+
+            const dx = x - game.ball.x;
+            const dy = y - game.ball.y;
+            const dist = Math.sqrt(dx * dx + dy * dy);
+            const angle = Math.atan2(dy, dx);
+
+            const power = Math.min(dist / 10, game.maxPower);
+            game.ball.vx = Math.cos(angle) * power;
+            game.ball.vy = Math.sin(angle) * power;
+
+            game.isAiming = false;
+            game.strokes++;
+        });
+
+        // Game loop
+        function gameLoop() {
+            if (!game.ballInHole) {
+                updatePhysics();
+            }
+            draw();
+            requestAnimationFrame(gameLoop);
+        }
+
+        gameLoop();
+    </script>
+</body>
+</html>
