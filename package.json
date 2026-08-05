@@ -1,0 +1,11 @@
+{
+  "name": "fore4gle",
+  "version": "1.0.0",
+  "description": "Minimalist HTML5 canvas mini golf",
+  "scripts": {
+    "test": "playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.49.0"
+  }
+}
