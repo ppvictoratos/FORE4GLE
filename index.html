@@ -39,7 +39,7 @@
         <h1>FORE4GLE ⛳</h1>
         <canvas id="gameCanvas" width="800" height="600"></canvas>
         <div id="info">
-            <p><strong>Click to aim, drag to set power, release to hit</strong></p>
+            <p><strong>Drag back from the ball and release to shoot (slingshot)</strong></p>
             <p>Strokes: <span id="strokes">0</span> | Ball Velocity: <span id="velocity">0.0</span></p>
         </div>
     </div>
@@ -48,83 +48,245 @@
         const canvas = document.getElementById('gameCanvas');
         const ctx = canvas.getContext('2d');
 
+        const TEE = { x: 200, y: 520 };
+
         // Game state
         const game = {
-            ball: { x: 100, y: 500, vx: 0, vy: 0, radius: 8, friction: 0.98, mass: 1 },
-            hole: { x: 700, y: 100, radius: 15 },
-            gravity: 0.3,
+            ball: { x: TEE.x, y: TEE.y, vx: 0, vy: 0, radius: 8, friction: 0.98 },
+            cup: { x: 610, y: 150, radius: 14 },
             strokes: 0,
             isAiming: false,
-            aimStart: null,
-            power: 0,
-            maxPower: 20,
+            aimPos: null,
+            maxPower: 18,
             ballInHole: false
         };
+
+        // Funnels: sloped basins that pull the ball toward their center.
+        // The blue one holds the cup; grey ones are traps you putt back out of.
+        const funnels = [
+            { x: 610, y: 150, r: 75, cup: true },
+            { x: 610, y: 300, r: 75, cup: false },
+            { x: 610, y: 445, r: 75, cup: false }
+        ];
+
+        // Walls as polylines (curves sampled into segments)
+        function arcPoints(cx, cy, r, a0, a1, n) {
+            const pts = [];
+            for (let i = 0; i <= n; i++) {
+                const a = a0 + (a1 - a0) * i / n;
+                pts.push({ x: cx + Math.cos(a) * r, y: cy + Math.sin(a) * r });
+            }
+            return pts;
+        }
+
+        const archLeft = [
+            { x: 140, y: 570 },
+            { x: 140, y: 190 },
+            ...arcPoints(270, 190, 130, Math.PI, Math.PI * 2, 14),
+            { x: 400, y: 430 }
+        ];
+
+        // Curve from the top wall sweeping down into the channel divider
+        const divider = [
+            { x: 520, y: 0 },
+            ...arcPoints(520, 95, 95, -Math.PI / 2, -Math.PI, 10),
+            { x: 425, y: 430 }
+        ];
+
+        // Wavy wall guarding the channel entrance (bottom right)
+        const wave = [];
+        for (let i = 0; i <= 24; i++) {
+            const t = i / 24;
+            wave.push({
+                x: 330 + t * 470,
+                y: 530 + Math.sin(t * Math.PI * 2) * 55
+            });
+        }
+
+        const walls = [archLeft, divider, wave];
+
+        // Build segment list once
+        const segments = [];
+        for (const poly of walls) {
+            for (let i = 0; i < poly.length - 1; i++) {
+                segments.push([poly[i], poly[i + 1]]);
+            }
+        }
+
+        // Circle vs segment collision, reflect velocity
+        function collideSegments(b) {
+            for (const [p, q] of segments) {
+                const dx = q.x - p.x, dy = q.y - p.y;
+                const len2 = dx * dx + dy * dy;
+                let t = ((b.x - p.x) * dx + (b.y - p.y) * dy) / len2;
+                t = Math.max(0, Math.min(1, t));
+                const cx = p.x + t * dx, cy = p.y + t * dy;
+                let nx = b.x - cx, ny = b.y - cy;
+                const dist = Math.sqrt(nx * nx + ny * ny);
+                if (dist < b.radius && dist > 0.0001) {
+                    nx /= dist; ny /= dist;
+                    // push out
+                    b.x = cx + nx * b.radius;
+                    b.y = cy + ny * b.radius;
+                    // reflect
+                    const dot = b.vx * nx + b.vy * ny;
+                    if (dot < 0) {
+                        b.vx -= 2 * dot * nx;
+                        b.vy -= 2 * dot * ny;
+                        b.vx *= 0.8;
+                        b.vy *= 0.8;
+                    }
+                }
+            }
+        }
 
         // Physics
         function updatePhysics() {
             const b = game.ball;
 
-            // Apply velocity (no gravity, just rolling)
             b.x += b.vx;
             b.y += b.vy;
 
-            // Friction (ball slows down)
-            b.vx *= game.ball.friction;
-            b.vy *= game.ball.friction;
+            b.vx *= b.friction;
+            b.vy *= b.friction;
 
-            // Boundary collision (walls bounce ball back)
+            // Funnel gravity: pull toward center, stronger near the middle
+            for (const f of funnels) {
+                const dx = f.x - b.x, dy = f.y - b.y;
+                const d = Math.sqrt(dx * dx + dy * dy);
+                if (d < f.r && d > 1) {
+                    const pull = 0.22 * (1 - d / f.r) + 0.05;
+                    b.vx += (dx / d) * pull;
+                    b.vy += (dy / d) * pull;
+                }
+            }
+
+            collideSegments(b);
+
+            // Canvas boundaries
             if (b.x - b.radius < 0) { b.x = b.radius; b.vx *= -0.8; }
             if (b.x + b.radius > canvas.width) { b.x = canvas.width - b.radius; b.vx *= -0.8; }
             if (b.y - b.radius < 0) { b.y = b.radius; b.vy *= -0.8; }
             if (b.y + b.radius > canvas.height) { b.y = canvas.height - b.radius; b.vy *= -0.8; }
 
-            // Stop if nearly still
-            if (Math.abs(b.vx) < 0.1 && Math.abs(b.vy) < 0.1) {
+            const speed = Math.sqrt(b.vx * b.vx + b.vy * b.vy);
+
+            // Stop if nearly still (outside funnels — inside, the pull keeps it drifting to center)
+            if (speed < 0.1) {
                 b.vx = 0;
                 b.vy = 0;
             }
 
-            // Check hole
-            const dx = b.x - game.hole.x;
-            const dy = b.y - game.hole.y;
-            const dist = Math.sqrt(dx * dx + dy * dy);
-            if (dist < b.radius + game.hole.radius) {
+            // Cup: only sinks if slow enough to drop
+            const dx = b.x - game.cup.x;
+            const dy = b.y - game.cup.y;
+            if (Math.sqrt(dx * dx + dy * dy) < game.cup.radius && speed < 7) {
                 game.ballInHole = true;
             }
         }
 
+        function ballStopped() {
+            return game.ball.vx === 0 && game.ball.vy === 0;
+        }
+
         // Draw
         function draw() {
-            // Clear
-            ctx.fillStyle = 'transparent';
             ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-            // Hole
+            // Funnels (diamond basins)
+            for (const f of funnels) {
+                ctx.fillStyle = f.cup ? 'rgba(60,120,60,0.45)' : 'rgba(60,110,60,0.35)';
+                ctx.beginPath();
+                ctx.moveTo(f.x, f.y - f.r);
+                ctx.lineTo(f.x + f.r, f.y);
+                ctx.lineTo(f.x, f.y + f.r);
+                ctx.lineTo(f.x - f.r, f.y);
+                ctx.closePath();
+                ctx.fill();
+                // inner shading toward the low point
+                const grad = ctx.createRadialGradient(f.x, f.y, 4, f.x, f.y, f.r * 0.7);
+                grad.addColorStop(0, 'rgba(0,40,0,0.35)');
+                grad.addColorStop(1, 'rgba(0,40,0,0)');
+                ctx.fillStyle = grad;
+                ctx.beginPath();
+                ctx.arc(f.x, f.y, f.r * 0.7, 0, Math.PI * 2);
+                ctx.fill();
+                if (!f.cup) {
+                    ctx.fillStyle = '#aab';
+                    ctx.beginPath();
+                    ctx.arc(f.x, f.y, 12, 0, Math.PI * 2);
+                    ctx.fill();
+                }
+            }
+
+            // Cup (blue)
+            ctx.fillStyle = '#5ab4e8';
+            ctx.beginPath();
+            ctx.arc(game.cup.x, game.cup.y, game.cup.radius, 0, Math.PI * 2);
+            ctx.fill();
             ctx.fillStyle = '#000';
             ctx.beginPath();
-            ctx.arc(game.hole.x, game.hole.y, game.hole.radius, 0, Math.PI * 2);
+            ctx.arc(game.cup.x, game.cup.y, game.cup.radius * 0.55, 0, Math.PI * 2);
             ctx.fill();
+
+            // Tee marker
+            ctx.fillStyle = 'rgba(240,200,80,0.9)';
+            ctx.beginPath();
+            ctx.moveTo(TEE.x, TEE.y - 12);
+            ctx.lineTo(TEE.x + 11, TEE.y + 8);
+            ctx.lineTo(TEE.x - 11, TEE.y + 8);
+            ctx.closePath();
+            ctx.fill();
+
+            // Walls
+            ctx.strokeStyle = '#111';
+            ctx.lineWidth = 6;
+            ctx.lineCap = 'round';
+            ctx.lineJoin = 'round';
+            for (const poly of walls) {
+                ctx.beginPath();
+                ctx.moveTo(poly[0].x, poly[0].y);
+                for (let i = 1; i < poly.length; i++) ctx.lineTo(poly[i].x, poly[i].y);
+                ctx.stroke();
+            }
 
             // Ball
+            const b = game.ball;
             ctx.fillStyle = '#fff';
             ctx.beginPath();
-            ctx.arc(game.ball.x, game.ball.y, game.ball.radius, 0, Math.PI * 2);
+            ctx.arc(b.x, b.y, b.radius, 0, Math.PI * 2);
             ctx.fill();
 
-            // Aim line
-            if (game.isAiming && game.aimStart) {
-                ctx.strokeStyle = 'rgba(255,255,255,0.5)';
+            // Slingshot aim: line opposite the drag + power dots
+            if (game.isAiming && game.aimPos) {
+                const dx = b.x - game.aimPos.x;
+                const dy = b.y - game.aimPos.y;
+                const dist = Math.sqrt(dx * dx + dy * dy);
+                const power = Math.min(dist / 10, game.maxPower);
+                const angle = Math.atan2(dy, dx);
+
+                // drag band (behind ball)
+                ctx.strokeStyle = 'rgba(255,255,255,0.35)';
                 ctx.lineWidth = 2;
                 ctx.beginPath();
-                ctx.moveTo(game.ball.x, game.ball.y);
-                const angle = Math.atan2(game.aimStart.y - game.ball.y, game.aimStart.x - game.ball.x);
-                ctx.lineTo(game.ball.x + Math.cos(angle) * 100, game.ball.y + Math.sin(angle) * 100);
+                ctx.moveTo(b.x, b.y);
+                ctx.lineTo(game.aimPos.x, game.aimPos.y);
                 ctx.stroke();
 
-                // Power bar
-                ctx.fillStyle = 'rgba(255,255,0,0.7)';
-                ctx.fillRect(game.ball.x - 30, game.ball.y - 50, game.power * 3, 10);
+                // trajectory dots (in firing direction)
+                ctx.fillStyle = 'rgba(255,255,255,0.8)';
+                for (let i = 1; i <= 8; i++) {
+                    const d = i * power * 1.8;
+                    ctx.beginPath();
+                    ctx.arc(b.x + Math.cos(angle) * d, b.y + Math.sin(angle) * d, 3 - i * 0.25, 0, Math.PI * 2);
+                    ctx.fill();
+                }
+
+                // power bar
+                ctx.fillStyle = 'rgba(0,0,0,0.4)';
+                ctx.fillRect(b.x - 30, b.y - 34, 60, 8);
+                ctx.fillStyle = power > game.maxPower * 0.85 ? '#e85a5a' : '#ffd94d';
+                ctx.fillRect(b.x - 30, b.y - 34, 60 * (power / game.maxPower), 8);
             }
 
             // Win message
@@ -136,51 +298,54 @@
                 ctx.textAlign = 'center';
                 ctx.fillText(`🎉 Hole in ${game.strokes}!`, canvas.width / 2, canvas.height / 2);
                 ctx.font = '20px Arial';
-                ctx.fillText('(Refresh to play again)', canvas.width / 2, canvas.height / 2 + 50);
+                ctx.fillText('Click to play again', canvas.width / 2, canvas.height / 2 + 50);
+                ctx.textAlign = 'start';
             }
 
-            // Update HUD
             document.getElementById('strokes').textContent = game.strokes;
-            const vel = Math.sqrt(game.ball.vx ** 2 + game.ball.vy ** 2);
+            const vel = Math.sqrt(b.vx ** 2 + b.vy ** 2);
             document.getElementById('velocity').textContent = vel.toFixed(1);
         }
 
-        // Input
-        canvas.addEventListener('mousedown', (e) => {
-            if (game.ballInHole) return;
+        function canvasPos(e) {
             const rect = canvas.getBoundingClientRect();
-            game.aimStart = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+            return { x: e.clientX - rect.left, y: e.clientY - rect.top };
+        }
+
+        // Input — slingshot: press anywhere, drag back, release to fire opposite
+        canvas.addEventListener('mousedown', (e) => {
+            if (game.ballInHole) {
+                game.ball.x = TEE.x; game.ball.y = TEE.y;
+                game.ball.vx = 0; game.ball.vy = 0;
+                game.strokes = 0;
+                game.ballInHole = false;
+                return;
+            }
+            if (!ballStopped()) return;
             game.isAiming = true;
-            game.power = 0;
+            game.aimPos = canvasPos(e);
         });
 
         canvas.addEventListener('mousemove', (e) => {
-            if (!game.isAiming || !game.aimStart) return;
-            const rect = canvas.getBoundingClientRect();
-            const x = e.clientX - rect.left;
-            const y = e.clientY - rect.top;
-            const dx = x - game.ball.x;
-            const dy = y - game.ball.y;
-            const dist = Math.sqrt(dx * dx + dy * dy);
-            game.power = Math.min(dist / 10, game.maxPower);
+            if (!game.isAiming) return;
+            game.aimPos = canvasPos(e);
         });
 
-        canvas.addEventListener('mouseup', (e) => {
-            if (!game.isAiming || !game.aimStart) return;
-            const rect = canvas.getBoundingClientRect();
-            const x = e.clientX - rect.left;
-            const y = e.clientY - rect.top;
-
-            const dx = x - game.ball.x;
-            const dy = y - game.ball.y;
+        window.addEventListener('mouseup', (e) => {
+            if (!game.isAiming || !game.aimPos) return;
+            const b = game.ball;
+            const pos = canvasPos(e);
+            const dx = b.x - pos.x;
+            const dy = b.y - pos.y;
             const dist = Math.sqrt(dx * dx + dy * dy);
-            const angle = Math.atan2(dy, dx);
+            game.isAiming = false;
+
+            if (dist < 5) return; // too small, treat as cancel
 
             const power = Math.min(dist / 10, game.maxPower);
-            game.ball.vx = Math.cos(angle) * power;
-            game.ball.vy = Math.sin(angle) * power;
-
-            game.isAiming = false;
+            const angle = Math.atan2(dy, dx);
+            b.vx = Math.cos(angle) * power;
+            b.vy = Math.sin(angle) * power;
             game.strokes++;
         });
 
