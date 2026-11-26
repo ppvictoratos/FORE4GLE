@@ -12,6 +12,8 @@ Minimalist top-down mini golf in a single HTML file. No build, no dependencies �
 
 Drag back from the ball and release — slingshot style. The further you pull, the harder the shot (power bar caps out red).
 
+The course is 18 holes, each with a par. Sink the ball, click, and you're on the next one. Finish all 18 for your total against par.
+
 **Hole 1:** Start in the arch pocket. The right channel has three sloped basins: the two grey ones are traps — no penalty, but you'll have to putt hard enough to climb back out. The blue one holds the cup. Carry enough speed to escape the traps, but not so much you fly past the hole.
 
 ## Run locally

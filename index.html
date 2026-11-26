@@ -40,6 +40,7 @@
         <canvas id="gameCanvas" width="800" height="600"></canvas>
         <div id="info">
             <p><strong>Drag back from the ball and release to shoot (slingshot)</strong></p>
+            <p><span id="hole"></span></p>
             <p>Strokes: <span id="strokes">0</span> | Ball Velocity: <span id="velocity">0.0</span></p>
         </div>
     </div>
@@ -48,28 +49,28 @@
         const canvas = document.getElementById('gameCanvas');
         const ctx = canvas.getContext('2d');
 
-        const TEE = { x: 200, y: 520 };
-
-        // Game state
+        // Game state (ball/cup/strokes/hole are swapped in by loadHole)
         const game = {
-            ball: { x: TEE.x, y: TEE.y, vx: 0, vy: 0, radius: 8, friction: 0.98 },
-            cup: { x: 610, y: 150, radius: 14 },
+            ball: { x: 0, y: 0, vx: 0, vy: 0, radius: 8, friction: 0.98 },
+            cup: { x: 0, y: 0, radius: 14 },
             strokes: 0,
             isAiming: false,
             aimPos: null,
             maxPower: 18,
-            ballInHole: false
+            ballInHole: false,
+            hole: 0,
+            scores: []
         };
 
-        // Funnels: sloped basins that pull the ball toward their center.
-        // The blue one holds the cup; grey ones are traps you putt back out of.
-        const funnels = [
-            { x: 610, y: 150, r: 75, cup: true },
-            { x: 610, y: 300, r: 75, cup: false },
-            { x: 610, y: 445, r: 75, cup: false }
-        ];
-
-        // Walls as polylines (curves sampled into segments)
+        // Helpers for drawing course walls
+        function L(...n) {
+            const pts = [];
+            for (let i = 0; i < n.length; i += 2) pts.push({ x: n[i], y: n[i + 1] });
+            return pts;
+        }
+        function box(x, y, w, h) {
+            return L(x, y, x + w, y, x + w, y + h, x, y + h, x, y);
+        }
         function arcPoints(cx, cy, r, a0, a1, n) {
             const pts = [];
             for (let i = 0; i <= n; i++) {
@@ -78,40 +79,101 @@
             }
             return pts;
         }
+        function waveWall(x0, x1, y, amp, cycles) {
+            const pts = [];
+            for (let i = 0; i <= 48; i++) {
+                const t = i / 48;
+                pts.push({ x: x0 + t * (x1 - x0), y: y + Math.sin(t * Math.PI * 2 * cycles) * amp });
+            }
+            return pts;
+        }
 
+        // Hole 1 walls (the original design)
         const archLeft = [
             { x: 140, y: 570 },
             { x: 140, y: 190 },
             ...arcPoints(270, 190, 130, Math.PI, Math.PI * 2, 14),
             { x: 400, y: 430 }
         ];
-
         // Curve from the top wall sweeping down into the channel divider
         const divider = [
             { x: 520, y: 0 },
             ...arcPoints(520, 95, 95, -Math.PI / 2, -Math.PI, 10),
             { x: 425, y: 430 }
         ];
-
         // Wavy wall guarding the channel entrance (bottom right)
-        const wave = [];
-        for (let i = 0; i <= 24; i++) {
-            const t = i / 24;
-            wave.push({
-                x: 330 + t * 470,
-                y: 530 + Math.sin(t * Math.PI * 2) * 55
-            });
-        }
+        const wave = waveWall(330, 800, 530, 55, 1);
 
-        const walls = [archLeft, divider, wave];
+        // The course: 18 holes. Walls are polylines; funnels are hole 1's traps only.
+        const HOLES = [
+            { name: 'The Arch', par: 3, tee: { x: 200, y: 520 }, cup: { x: 610, y: 150 },
+              funnels: [
+                  { x: 610, y: 150, r: 75, cup: true },
+                  { x: 610, y: 300, r: 75, cup: false },
+                  { x: 610, y: 445, r: 75, cup: false }
+              ],
+              walls: [archLeft, divider, wave] },
+            { name: 'Gate of Hades', par: 2, tee: { x: 100, y: 300 }, cup: { x: 700, y: 300 }, funnels: [],
+              walls: [L(60, 200, 740, 200, 740, 400, 60, 400, 60, 200), L(400, 200, 400, 230), L(400, 280, 400, 400)] },
+            { name: "Atlas' Pillar", par: 3, tee: { x: 120, y: 500 }, cup: { x: 680, y: 100 }, funnels: [],
+              walls: [box(380, 240, 40, 120)] },
+            { name: "Sisyphus' Fence", par: 3, tee: { x: 100, y: 120 }, cup: { x: 700, y: 500 }, funnels: [],
+              walls: [L(80, 300, 560, 300)] },
+            { name: 'Labyrinth', par: 4, tee: { x: 60, y: 540 }, cup: { x: 60, y: 60 }, funnels: [],
+              walls: [L(0, 460, 620, 460), L(180, 300, 800, 300), L(0, 140, 620, 140)] },
+            { name: 'The Sphinx', par: 3, tee: { x: 120, y: 300 }, cup: { x: 680, y: 300 }, funnels: [],
+              walls: [L(330, 200, 470, 300, 330, 400, 330, 200)] },
+            { name: "Theseus' Turn", par: 4, tee: { x: 80, y: 100 }, cup: { x: 720, y: 500 }, funnels: [],
+              walls: [L(180, 0, 180, 420, 640, 420)] },
+            { name: 'Icarus', par: 4, tee: { x: 100, y: 540 }, cup: { x: 700, y: 60 }, funnels: [],
+              walls: [L(120, 400, 520, 400), L(280, 200, 680, 200)] },
+            { name: 'Medusa', par: 3, tee: { x: 80, y: 300 }, cup: { x: 720, y: 300 }, funnels: [],
+              walls: [box(200, 140, 50, 50), box(200, 410, 50, 50), box(400, 260, 60, 80), box(560, 140, 50, 50), box(560, 410, 50, 50)] },
+            { name: "Ariadne's Ring", par: 4, tee: { x: 100, y: 300 }, cup: { x: 400, y: 300 }, funnels: [],
+              walls: [arcPoints(400, 300, 200, 0.35, Math.PI * 2 - 0.35, 60)] },
+            { name: 'Cross of Hermes', par: 3, tee: { x: 100, y: 300 }, cup: { x: 700, y: 300 }, funnels: [],
+              walls: [L(380, 240, 420, 240, 420, 280, 460, 280, 460, 320, 420, 320, 420, 360, 380, 360, 380, 320, 340, 320, 340, 280, 380, 280, 380, 240)] },
+            { name: "Charon's Channel", par: 3, tee: { x: 150, y: 300 }, cup: { x: 400, y: 300 }, funnels: [],
+              walls: [L(300, 120, 300, 500), L(500, 120, 500, 500)] },
+            { name: 'The Serpent', par: 4, tee: { x: 60, y: 500 }, cup: { x: 740, y: 100 }, funnels: [],
+              walls: [waveWall(100, 700, 300, 90, 2)] },
+            { name: 'Gauntlet', par: 4, tee: { x: 100, y: 300 }, cup: { x: 700, y: 300 }, funnels: [],
+              walls: [L(250, 0, 250, 420), L(400, 180, 400, 600), L(550, 0, 550, 420)] },
+            { name: 'Hydra', par: 4, tee: { x: 80, y: 300 }, cup: { x: 720, y: 300 }, funnels: [],
+              walls: [box(200, 150, 60, 60), box(200, 390, 60, 60), box(480, 240, 80, 120)] },
+            { name: 'Narrows of the Styx', par: 3, tee: { x: 60, y: 300 }, cup: { x: 740, y: 120 }, funnels: [],
+              walls: [L(40, 340, 40, 260, 640, 260), L(40, 340, 640, 340)] },
+            { name: 'The Colosseum', par: 4, tee: { x: 640, y: 380 }, cup: { x: 160, y: 220 }, funnels: [],
+              walls: [arcPoints(400, 300, 280, -Math.PI + 0.4, Math.PI - 0.4, 80), box(360, 270, 80, 60)] },
+            { name: 'Olympus', par: 5, tee: { x: 60, y: 60 }, cup: { x: 740, y: 540 }, funnels: [],
+              walls: [box(330, 260, 60, 60), box(520, 380, 60, 60), box(200, 120, 60, 60), box(600, 180, 60, 60)] }
+        ];
 
-        // Build segment list once
-        const segments = [];
-        for (const poly of walls) {
-            for (let i = 0; i < poly.length - 1; i++) {
-                segments.push([poly[i], poly[i + 1]]);
+        // Current-hole geometry (reassigned by loadHole)
+        let TEE = HOLES[0].tee;
+        let walls = [];
+        let segments = [];
+        let funnels = [];
+
+        function loadHole(i) {
+            const h = HOLES[i];
+            TEE = h.tee;
+            walls = h.walls;
+            funnels = h.funnels.map(f => ({ ...f }));
+            segments = [];
+            for (const poly of walls) {
+                for (let k = 0; k < poly.length - 1; k++) segments.push([poly[k], poly[k + 1]]);
             }
+            game.cup = { x: h.cup.x, y: h.cup.y, radius: 14 };
+            game.ball = { x: TEE.x, y: TEE.y, vx: 0, vy: 0, radius: 8, friction: 0.98 };
+            game.hole = i;
+            game.strokes = 0;
+            game.ballInHole = false;
+            game.funnelEnter = null;
+            game.isAiming = false;
+            game.aimPos = null;
         }
+        loadHole(0);
 
         // Circle vs segment collision, reflect velocity
         function collideSegments(b) {
@@ -207,6 +269,17 @@
 
         function ballStopped() {
             return game.ball.vx === 0 && game.ball.vy === 0;
+        }
+
+        function scoreName(strokes, par) {
+            const d = strokes - par;
+            if (strokes === 1) return 'Hole in one';
+            if (d <= -2) return 'Eagle';
+            if (d === -1) return 'Birdie';
+            if (d === 0) return 'Par';
+            if (d === 1) return 'Bogey';
+            if (d === 2) return 'Double bogey';
+            return `+${d}`;
         }
 
         // Draw
@@ -309,22 +382,33 @@
                 ctx.fillRect(b.x - 30, b.y - 34, 60 * (power / game.maxPower), 8);
             }
 
-            // Win message
+            // Hole finished overlay
             if (game.ballInHole) {
+                const par = HOLES[game.hole].par;
+                const last = game.hole === HOLES.length - 1;
                 ctx.fillStyle = 'rgba(0,0,0,0.7)';
                 ctx.fillRect(0, 0, canvas.width, canvas.height);
                 ctx.fillStyle = '#fff';
-                ctx.font = 'bold 40px Arial';
                 ctx.textAlign = 'center';
-                // hole in 2 = eagle, until real pars exist
-                const label = game.strokes === 2 ? '🦅' : game.strokes;
-                ctx.fillText(`🎉 Hole in ${label}!`, canvas.width / 2, canvas.height / 2);
-                ctx.font = '20px Arial';
-                ctx.fillText('Click to play again', canvas.width / 2, canvas.height / 2 + 50);
+                ctx.font = 'bold 40px Arial';
+                if (!last) {
+                    ctx.fillText(`🎉 ${scoreName(game.strokes, par)}! (${game.strokes})`, canvas.width / 2, canvas.height / 2);
+                    ctx.font = '20px Arial';
+                    ctx.fillText(`Click for hole ${game.hole + 2}`, canvas.width / 2, canvas.height / 2 + 50);
+                } else {
+                    const total = game.scores.reduce((a, s) => a + s, 0);
+                    const totalPar = HOLES.reduce((a, h) => a + h.par, 0);
+                    const diff = total - totalPar;
+                    const diffText = diff === 0 ? 'Even par' : (diff > 0 ? `+${diff}` : `${diff}`);
+                    ctx.fillText(`🏆 Course complete: ${total} (${diffText})`, canvas.width / 2, canvas.height / 2);
+                    ctx.font = '20px Arial';
+                    ctx.fillText('Click to play again', canvas.width / 2, canvas.height / 2 + 50);
+                }
                 ctx.textAlign = 'start';
             }
 
             document.getElementById('strokes').textContent = game.strokes;
+            document.getElementById('hole').textContent = `${game.hole + 1} of ${HOLES.length} · ${HOLES[game.hole].name} · Par ${HOLES[game.hole].par}`;
             const vel = Math.sqrt(b.vx ** 2 + b.vy ** 2);
             document.getElementById('velocity').textContent = vel.toFixed(1);
         }
@@ -337,10 +421,12 @@
         // Input — slingshot: press anywhere, drag back, release to fire opposite
         canvas.addEventListener('mousedown', (e) => {
             if (game.ballInHole) {
-                game.ball.x = TEE.x; game.ball.y = TEE.y;
-                game.ball.vx = 0; game.ball.vy = 0;
-                game.strokes = 0;
-                game.ballInHole = false;
+                if (game.hole < HOLES.length - 1) {
+                    loadHole(game.hole + 1);
+                } else {
+                    game.scores = [];
+                    loadHole(0);
+                }
                 return;
             }
             if (!ballStopped()) return;
@@ -375,6 +461,7 @@
         function gameLoop() {
             if (!game.ballInHole) {
                 updatePhysics();
+                if (game.ballInHole) game.scores[game.hole] = game.strokes;
             }
             draw();
             requestAnimationFrame(gameLoop);
